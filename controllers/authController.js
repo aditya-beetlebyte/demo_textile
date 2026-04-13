@@ -65,11 +65,15 @@ export const login = asyncHandler(async (req, res) => {
       .limit(2000)
       .lean();
     const pendingTaskCount = tasks.filter((t) => t.status === 'pending').length;
+    const inProgressTaskCount = tasks.filter((t) => t.status === 'in_progress').length;
+    const inReviewTaskCount = tasks.filter((t) => t.status === 'in_review').length;
     const completedTaskCount = tasks.filter((t) => t.status === 'completed').length;
     extra = {
       tasks,
       taskCount: tasks.length,
       pendingTaskCount,
+      inProgressTaskCount,
+      inReviewTaskCount,
       completedTaskCount,
     };
   }

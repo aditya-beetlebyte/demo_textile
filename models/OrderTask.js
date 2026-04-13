@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { TASK_STATUSES } from './constants.js';
 
 const orderTaskSchema = new mongoose.Schema(
   {
@@ -7,7 +8,7 @@ const orderTaskSchema = new mongoose.Schema(
     assignee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true },
     title: { type: String, required: true },
     dueDate: { type: Date, required: true },
-    status: { type: String, enum: ['pending',"in_progress","in_review", 'completed'], default: 'pending' },
+    status: { type: String, enum: TASK_STATUSES, default: 'pending' },
     comment: { type: String, default: '' },
     photoUrl: { type: String, default: '' },
     completedAt: { type: Date, default: null },
@@ -17,8 +18,8 @@ const orderTaskSchema = new mongoose.Schema(
         actorRole: { type: String, enum: ['admin', 'dri'], required: true },
         note: { type: String, default: '' },
         imageUrl: { type: String, default: '' },
-        statusFrom: { type: String, enum: ['pending', "in_progress","in_review", 'completed'], default: null },
-        statusTo: { type: String, enum: ['pending', "in_progress","in_review", 'completed'], default: null },
+        statusFrom: { type: String, enum: TASK_STATUSES },
+        statusTo: { type: String, enum: TASK_STATUSES },
         createdAt: { type: Date, default: Date.now },
       },
     ],

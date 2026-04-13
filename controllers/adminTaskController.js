@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import Order from '../models/Order.js';
 import OrderTask from '../models/OrderTask.js';
 import Employee from '../models/Employee.js';
-import { ORDER_TYPES } from '../models/constants.js';
+import { ORDER_TYPES, TASK_STATUSES, normalizeTaskStatusInput } from '../models/constants.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { startOfDayUTC, addCalendarDaysUTC } from '../utils/date.js';
 import { uploadTaskPhoto } from '../utils/gcs.js';
@@ -31,6 +31,8 @@ export const listTasks = asyncHandler(async (req, res) => {
         tasks: [],
         totalTaskCount: 0,
         pendingTaskCount: 0,
+        inProgressTaskCount: 0,
+        inReviewTaskCount: 0,
         completedTaskCount: 0,
       });
     }
@@ -68,16 +70,21 @@ export const listTasks = asyncHandler(async (req, res) => {
         tasks: [],
         totalTaskCount: 0,
         pendingTaskCount: 0,
+        inProgressTaskCount: 0,
+        inReviewTaskCount: 0,
         completedTaskCount: 0,
       });
     }
   }
 
-  const [totalTaskCount, pendingTaskCount, completedTaskCount] = await Promise.all([
-    OrderTask.countDocuments(filter),
-    OrderTask.countDocuments({ ...filter, status: 'pending' }),
-    OrderTask.countDocuments({ ...filter, status: 'completed' }),
-  ]);
+  const [totalTaskCount, pendingTaskCount, inProgressTaskCount, inReviewTaskCount, completedTaskCount] =
+    await Promise.all([
+      OrderTask.countDocuments(filter),
+      OrderTask.countDocuments({ ...filter, status: 'pending' }),
+      OrderTask.countDocuments({ ...filter, status: 'in_progress' }),
+      OrderTask.countDocuments({ ...filter, status: 'in_review' }),
+      OrderTask.countDocuments({ ...filter, status: 'completed' }),
+    ]);
 
   const tasks = await OrderTask.find(filter)
     .populate('order', 'orderType orderedByName orderDate')
@@ -91,6 +98,8 @@ export const listTasks = asyncHandler(async (req, res) => {
     tasks,
     totalTaskCount,
     pendingTaskCount,
+    inProgressTaskCount,
+    inReviewTaskCount,
     completedTaskCount,
   });
 });
@@ -111,9 +120,10 @@ async function loadAdminTask(req) {
   return task;
 }
 
-async function persistAdminTaskUpdate(req, res, task, { note, status, imageUrl }) {
-  if (status && !['pending', 'completed'].includes(status)) {
-    const err = new Error('status must be one of: pending, completed');
+async function persistAdminTaskUpdate(req, res, task, { note, status: rawStatus, imageUrl }) {
+  const status = rawStatus != null ? normalizeTaskStatusInput(rawStatus) : '';
+  if (status && !TASK_STATUSES.includes(status)) {
+    const err = new Error(`status must be one of: ${TASK_STATUSES.join(', ')}`);
     err.statusCode = 400;
     throw err;
   }
@@ -132,14 +142,17 @@ async function persistAdminTaskUpdate(req, res, task, { note, status, imageUrl }
     task.status = status;
     task.completedAt = status === 'completed' ? new Date() : null;
   }
-  task.updates.push({
+  const updateEntry = {
     actor: req.user._id,
     actorRole: req.user.role,
     note: note || '',
     imageUrl: imageUrl || '',
-    statusFrom: shouldChangeStatus ? statusFrom : null,
-    statusTo: shouldChangeStatus ? status : null,
-  });
+  };
+  if (shouldChangeStatus) {
+    updateEntry.statusFrom = statusFrom;
+    updateEntry.statusTo = status;
+  }
+  task.updates.push(updateEntry);
   await task.save();
 
   const updated = await OrderTask.findById(task._id)
@@ -151,7 +164,7 @@ async function persistAdminTaskUpdate(req, res, task, { note, status, imageUrl }
   res.json({ task: updated });
 }
 
-/** JSON body: `note` and/or `status` (`pending` | `completed`). */
+/** JSON body: `note` and/or `status` (see TASK_STATUSES). */
 export const patchAdminTask = asyncHandler(async (req, res) => {
   const task = await loadAdminTask(req);
   const note = req.body && req.body.note != null ? String(req.body.note) : '';

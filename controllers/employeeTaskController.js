@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import Order from '../models/Order.js';
 import OrderTask from '../models/OrderTask.js';
-import { ORDER_TYPES } from '../models/constants.js';
+import { ORDER_TYPES, TASK_STATUSES, normalizeTaskStatusInput } from '../models/constants.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { startOfDayUTC, addCalendarDaysUTC } from '../utils/date.js';
 import { uploadTaskPhoto } from '../utils/gcs.js';
@@ -23,14 +23,17 @@ async function applyTaskUpdate({ task, actor, note, imageUrl, nextStatus }) {
 
   const updateNote =
     note !== undefined ? (note != null ? String(note) : '') : '';
-  task.updates.push({
+  const updateEntry = {
     actor: actor._id,
     actorRole: actor.role,
     note: updateNote,
     imageUrl: imageUrl || '',
-    statusFrom: shouldChangeStatus ? statusFrom : null,
-    statusTo: shouldChangeStatus ? nextStatus : null,
-  });
+  };
+  if (shouldChangeStatus) {
+    updateEntry.statusFrom = statusFrom;
+    updateEntry.statusTo = nextStatus;
+  }
+  task.updates.push(updateEntry);
   await task.save();
 }
 
@@ -70,16 +73,21 @@ export const listMyTasks = asyncHandler(async (req, res) => {
         tasks: [],
         totalTaskCount: 0,
         pendingTaskCount: 0,
+        inProgressTaskCount: 0,
+        inReviewTaskCount: 0,
         completedTaskCount: 0,
       });
     }
   }
 
-  const [totalTaskCount, pendingTaskCount, completedTaskCount] = await Promise.all([
-    OrderTask.countDocuments(filter),
-    OrderTask.countDocuments({ ...filter, status: 'pending' }),
-    OrderTask.countDocuments({ ...filter, status: 'completed' }),
-  ]);
+  const [totalTaskCount, pendingTaskCount, inProgressTaskCount, inReviewTaskCount, completedTaskCount] =
+    await Promise.all([
+      OrderTask.countDocuments(filter),
+      OrderTask.countDocuments({ ...filter, status: 'pending' }),
+      OrderTask.countDocuments({ ...filter, status: 'in_progress' }),
+      OrderTask.countDocuments({ ...filter, status: 'in_review' }),
+      OrderTask.countDocuments({ ...filter, status: 'completed' }),
+    ]);
 
   const tasks = await OrderTask.find(filter)
     .populate('order', 'orderType orderedByName orderDate')
@@ -92,6 +100,8 @@ export const listMyTasks = asyncHandler(async (req, res) => {
     tasks,
     totalTaskCount,
     pendingTaskCount,
+    inProgressTaskCount,
+    inReviewTaskCount,
     completedTaskCount,
   });
 });
@@ -163,14 +173,15 @@ async function respondWithTask(res, taskId) {
   res.json({ task: updated });
 }
 
-/** JSON body: `note` and/or `status` (`pending` | `completed`). */
+/** JSON body: `note` and/or `status` (see TASK_STATUSES). */
 export const patchEmployeeTask = asyncHandler(async (req, res) => {
   const task = await loadAssignedTask(req);
   const hasNote = req.body && Object.prototype.hasOwnProperty.call(req.body, 'note');
   const note = hasNote ? (req.body.note != null ? String(req.body.note) : '') : undefined;
-  const status = req.body && req.body.status != null ? String(req.body.status) : '';
-  if (status && !['pending', 'completed'].includes(status)) {
-    const err = new Error('status must be one of: pending, completed');
+  const status =
+    req.body && req.body.status != null ? normalizeTaskStatusInput(req.body.status) : '';
+  if (status && !TASK_STATUSES.includes(status)) {
+    const err = new Error(`status must be one of: ${TASK_STATUSES.join(', ')}`);
     err.statusCode = 400;
     throw err;
   }
@@ -208,9 +219,10 @@ export const uploadEmployeeTaskPhoto = asyncHandler(async (req, res) => {
   });
   const hasNote = req.body && Object.prototype.hasOwnProperty.call(req.body, 'note');
   const note = hasNote ? (req.body.note != null ? String(req.body.note) : '') : undefined;
-  const status = req.body && req.body.status != null ? String(req.body.status) : '';
-  if (status && !['pending', 'completed'].includes(status)) {
-    const err = new Error('status must be one of: pending, completed');
+  const status =
+    req.body && req.body.status != null ? normalizeTaskStatusInput(req.body.status) : '';
+  if (status && !TASK_STATUSES.includes(status)) {
+    const err = new Error(`status must be one of: ${TASK_STATUSES.join(', ')}`);
     err.statusCode = 400;
     throw err;
   }
