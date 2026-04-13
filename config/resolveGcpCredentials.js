@@ -2,10 +2,10 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * Local dev: .env may set GOOGLE_APPLICATION_CREDENTIALS=./keys/gcp-key.json
- * with docker-compose mounting ./keys (file is gitignored).
- * Production: that path does not exist — unset so @google-cloud uses the
- * runtime service account (Cloud Run / GCE metadata) instead of ENOENT.
+ * Local dev: GOOGLE_APPLICATION_CREDENTIALS=./keys/gcp-key.json (gitignored).
+ * If the path is missing (e.g. Render without the file), unset it so the app
+ * does not point at a non-existent file; use GCP_SERVICE_ACCOUNT_JSON or
+ * GCP_SERVICE_ACCOUNT_JSON_BASE64 in env instead (see utils/gcs.js).
  */
 const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
 if (!raw) {

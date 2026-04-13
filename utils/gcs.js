@@ -1,38 +1,112 @@
 import { Storage } from '@google-cloud/storage';
+import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
 let storageSingleton;
 
 /**
- * Non-GCP servers (VPS, Render, etc.) have no metadata-based ADC. Options:
- * - GCP_SERVICE_ACCOUNT_JSON: full JSON key as one line (set in host secrets, not git)
- * - GCP_SERVICE_ACCOUNT_JSON_BASE64: same JSON base64-encoded (easier in some UIs)
- * - GOOGLE_APPLICATION_CREDENTIALS: path to key file (local/docker with mounted keys/)
- * - Running on Cloud Run / GCE: omit all of the above and use the runtime service account
+ * Credentials for hosts without a key file (Render, Railway, etc.):
+ * - GCP_SERVICE_ACCOUNT_JSON_BASE64: base64 of the full service account JSON (best for Render secrets UI)
+ * - GCP_SERVICE_ACCOUNT_JSON (or GOOGLE_APPLICATION_CREDENTIALS_JSON): one-line JSON string
+ * Local / Docker with a file:
+ * - GOOGLE_APPLICATION_CREDENTIALS: path to gcp-key.json (after resolveGcpCredentials.js)
+ * GCP-managed runtime (Cloud Run / GCE): omit the above; use default credentials.
  */
-function buildStorageOptions() {
+
+const JSON_ENV_KEYS = [
+  'GCP_SERVICE_ACCOUNT_JSON',
+  'GOOGLE_APPLICATION_CREDENTIALS_JSON',
+  'GCP_CREDENTIALS_JSON',
+];
+
+function parseServiceAccountJson(raw) {
+  const s = String(raw).trim().replace(/^\uFEFF/, '');
+  if (!s) return null;
+  try {
+    return JSON.parse(s);
+  } catch {
+    // Some dashboards wrap the whole JSON in an extra pair of quotes
+    if (
+      (s.startsWith('"') && s.endsWith('"')) ||
+      (s.startsWith("'") && s.endsWith("'"))
+    ) {
+      const inner = JSON.parse(s);
+      return typeof inner === 'string' ? JSON.parse(inner) : inner;
+    }
+    throw new Error('invalid JSON');
+  }
+}
+
+function storageOptionsFromCredentials(credentials) {
+  if (!credentials || credentials.type !== 'service_account') {
+    return null;
+  }
+  const projectId = credentials.project_id;
+  return projectId
+    ? { credentials, projectId }
+    : { credentials };
+}
+
+function tryBase64Env() {
   const b64 = process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64?.trim();
-  if (b64) {
-    try {
-      const json = Buffer.from(b64, 'base64').toString('utf8');
-      return { credentials: JSON.parse(json) };
-    } catch {
-      const err = new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is not valid base64 JSON');
+  if (!b64) return null;
+  try {
+    const json = Buffer.from(b64, 'base64').toString('utf8');
+    const credentials = parseServiceAccountJson(json);
+    const opts = storageOptionsFromCredentials(credentials);
+    if (!opts) {
+      const err = new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 must decode to a service account JSON object');
       err.statusCode = 500;
       throw err;
     }
+    return opts;
+  } catch (e) {
+    if (e.statusCode) throw e;
+    const err = new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is not valid base64 or JSON');
+    err.statusCode = 500;
+    throw err;
   }
-  const raw = process.env.GCP_SERVICE_ACCOUNT_JSON?.trim();
-  if (raw) {
+}
+
+function tryInlineJsonEnvs() {
+  for (const key of JSON_ENV_KEYS) {
+    const raw = process.env[key]?.trim();
+    if (!raw) continue;
     try {
-      return { credentials: JSON.parse(raw) };
+      const credentials = parseServiceAccountJson(raw);
+      const opts = storageOptionsFromCredentials(credentials);
+      if (opts) return opts;
     } catch {
-      const err = new Error('GCP_SERVICE_ACCOUNT_JSON is not valid JSON');
-      err.statusCode = 500;
-      throw err;
+      continue;
     }
   }
+  return null;
+}
+
+function tryCredentialsFile() {
+  const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
+  if (!raw) return null;
+  const resolved = path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  try {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return null;
+    const credentials = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    return storageOptionsFromCredentials(credentials);
+  } catch {
+    return null;
+  }
+}
+
+function buildStorageOptions() {
+  const fromB64 = tryBase64Env();
+  if (fromB64) return fromB64;
+
+  const fromEnv = tryInlineJsonEnvs();
+  if (fromEnv) return fromEnv;
+
+  const fromFile = tryCredentialsFile();
+  if (fromFile) return fromFile;
+
   return null;
 }
 
@@ -72,9 +146,6 @@ export async function uploadTaskPhoto({ buffer, contentType, orderId, taskId, or
   const file = bucket.file(dest);
   const ct = contentType || 'application/octet-stream';
 
-  // Avoid file.save() / createWriteStream — those use a stream pipeline that can throw
-  // "Cannot call write after a stream was destroyed" in some Node/container setups.
-  // Upload via V4 signed PUT + fetch instead (same pattern as Google Cloud docs).
   const [uploadUrl] = await file.getSignedUrl({
     version: 'v4',
     action: 'write',
