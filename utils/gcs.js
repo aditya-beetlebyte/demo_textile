@@ -29,12 +29,30 @@ export async function uploadTaskPhoto({ buffer, contentType, orderId, taskId, or
   const suffix = getExtension(originalName, contentType);
   const dest = `textile-demo/${orderId}/${taskId}/${crypto.randomUUID()}${suffix}`;
   const file = bucket.file(dest);
+  const ct = contentType || 'application/octet-stream';
 
-  await file.save(buffer, {
-    metadata: { contentType: contentType || 'application/octet-stream' },
-    resumable: false,
-    validation: false, // avoids HashStreamValidator stream bug in some environments
+  // Avoid file.save() / createWriteStream — those use a stream pipeline that can throw
+  // "Cannot call write after a stream was destroyed" in some Node/container setups.
+  // Upload via V4 signed PUT + fetch instead (same pattern as Google Cloud docs).
+  const [uploadUrl] = await file.getSignedUrl({
+    version: 'v4',
+    action: 'write',
+    expires: Date.now() + 15 * 60 * 1000,
+    contentType: ct,
   });
+  const putRes = await fetch(uploadUrl, {
+    method: 'PUT',
+    body: buffer,
+    headers: { 'Content-Type': ct },
+  });
+  if (!putRes.ok) {
+    const detail = await putRes.text().catch(() => '');
+    const err = new Error(
+      `GCS upload failed: ${putRes.status} ${putRes.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`
+    );
+    err.statusCode = 502;
+    throw err;
+  }
 
   if (process.env.GCP_PUBLIC_READ === '1') {
     return `https://storage.googleapis.com/${bucketName}/${dest}`;
