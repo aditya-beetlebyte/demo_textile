@@ -4,9 +4,42 @@ import crypto from 'crypto';
 
 let storageSingleton;
 
+/**
+ * Non-GCP servers (VPS, Render, etc.) have no metadata-based ADC. Options:
+ * - GCP_SERVICE_ACCOUNT_JSON: full JSON key as one line (set in host secrets, not git)
+ * - GCP_SERVICE_ACCOUNT_JSON_BASE64: same JSON base64-encoded (easier in some UIs)
+ * - GOOGLE_APPLICATION_CREDENTIALS: path to key file (local/docker with mounted keys/)
+ * - Running on Cloud Run / GCE: omit all of the above and use the runtime service account
+ */
+function buildStorageOptions() {
+  const b64 = process.env.GCP_SERVICE_ACCOUNT_JSON_BASE64?.trim();
+  if (b64) {
+    try {
+      const json = Buffer.from(b64, 'base64').toString('utf8');
+      return { credentials: JSON.parse(json) };
+    } catch {
+      const err = new Error('GCP_SERVICE_ACCOUNT_JSON_BASE64 is not valid base64 JSON');
+      err.statusCode = 500;
+      throw err;
+    }
+  }
+  const raw = process.env.GCP_SERVICE_ACCOUNT_JSON?.trim();
+  if (raw) {
+    try {
+      return { credentials: JSON.parse(raw) };
+    } catch {
+      const err = new Error('GCP_SERVICE_ACCOUNT_JSON is not valid JSON');
+      err.statusCode = 500;
+      throw err;
+    }
+  }
+  return null;
+}
+
 function getStorage() {
   if (!storageSingleton) {
-    storageSingleton = new Storage();
+    const explicit = buildStorageOptions();
+    storageSingleton = explicit ? new Storage(explicit) : new Storage();
   }
   return storageSingleton;
 }
