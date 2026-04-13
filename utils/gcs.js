@@ -33,6 +33,7 @@ export async function uploadTaskPhoto({ buffer, contentType, orderId, taskId, or
   await file.save(buffer, {
     metadata: { contentType: contentType || 'application/octet-stream' },
     resumable: false,
+    validation: false, // avoids HashStreamValidator stream bug in some environments
   });
 
   if (process.env.GCP_PUBLIC_READ === '1') {
