@@ -21,8 +21,11 @@ const JSON_ENV_KEYS = [
 ];
 
 function parseServiceAccountJson(raw) {
-  const s = String(raw).trim().replace(/^\uFEFF/, '');
+  let s = String(raw).trim().replace(/^\uFEFF/, '');
   if (!s) return null;
+  // Terminal / Render textarea wraps long lines and inserts real CR/LF inside strings — invalid JSON.
+  // Escaped "\n" in the file is two chars (backslash + n), not a newline; stripping only real \r and \n is safe.
+  s = s.replace(/\r\n/g, '').replace(/\r/g, '').replace(/\n/g, '');
   try {
     return JSON.parse(s);
   } catch {
