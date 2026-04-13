@@ -95,42 +95,31 @@ export const listTasks = asyncHandler(async (req, res) => {
   });
 });
 
-export const addAdminTaskUpdate = asyncHandler(async (req, res) => {
+async function loadAdminTask(req) {
   const { taskId } = req.params;
   if (!mongoose.isValidObjectId(taskId)) {
     const err = new Error('Invalid taskId');
     err.statusCode = 400;
     throw err;
   }
-
   const task = await OrderTask.findById(taskId);
   if (!task) {
     const err = new Error('Task not found');
     err.statusCode = 404;
     throw err;
   }
+  return task;
+}
 
-  const note = req.body && req.body.note != null ? String(req.body.note) : '';
-  const status = req.body && req.body.status != null ? String(req.body.status) : '';
+async function persistAdminTaskUpdate(req, res, task, { note, status, imageUrl }) {
   if (status && !['pending', 'completed'].includes(status)) {
-    const err = new Error("status must be one of: pending, completed");
+    const err = new Error('status must be one of: pending, completed');
     err.statusCode = 400;
     throw err;
   }
 
-  let imageUrl = '';
-  if (req.file && req.file.buffer) {
-    imageUrl = await uploadTaskPhoto({
-      buffer: req.file.buffer,
-      contentType: req.file.mimetype,
-      orderId: task.order.toString(),
-      taskId: task._id.toString(),
-      originalName: req.file.originalname,
-    });
-  }
-
   if (!note && !imageUrl && !status) {
-    const err = new Error('Provide at least one of note, photo, or status');
+    const err = new Error('Provide at least one of note or status');
     err.statusCode = 400;
     throw err;
   }
@@ -160,4 +149,32 @@ export const addAdminTaskUpdate = asyncHandler(async (req, res) => {
     .lean();
 
   res.json({ task: updated });
+}
+
+/** JSON body: `note` and/or `status` (`pending` | `completed`). */
+export const patchAdminTask = asyncHandler(async (req, res) => {
+  const task = await loadAdminTask(req);
+  const note = req.body && req.body.note != null ? String(req.body.note) : '';
+  const status = req.body && req.body.status != null ? String(req.body.status) : '';
+  await persistAdminTaskUpdate(req, res, task, { note, status, imageUrl: '' });
+});
+
+/** Multipart: field `photo` (required). Optional `note`, `status` in the same form. */
+export const uploadAdminTaskPhoto = asyncHandler(async (req, res) => {
+  const task = await loadAdminTask(req);
+  if (!req.file || !req.file.buffer) {
+    const err = new Error('photo is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const imageUrl = await uploadTaskPhoto({
+    buffer: req.file.buffer,
+    contentType: req.file.mimetype,
+    orderId: task.order.toString(),
+    taskId: task._id.toString(),
+    originalName: req.file.originalname,
+  });
+  const note = req.body && req.body.note != null ? String(req.body.note) : '';
+  const status = req.body && req.body.status != null ? String(req.body.status) : '';
+  await persistAdminTaskUpdate(req, res, task, { note, status, imageUrl });
 });

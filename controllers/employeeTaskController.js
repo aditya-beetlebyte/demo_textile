@@ -10,7 +10,9 @@ async function applyTaskUpdate({ task, actor, note, imageUrl, nextStatus }) {
   const statusFrom = task.status;
   const shouldChangeStatus = nextStatus && nextStatus !== task.status;
 
-  task.comment = note != null ? String(note) : task.comment;
+  if (note !== undefined) {
+    task.comment = note != null ? String(note) : task.comment;
+  }
   if (imageUrl) {
     task.photoUrl = imageUrl;
   }
@@ -19,10 +21,12 @@ async function applyTaskUpdate({ task, actor, note, imageUrl, nextStatus }) {
     task.completedAt = nextStatus === 'completed' ? new Date() : null;
   }
 
+  const updateNote =
+    note !== undefined ? (note != null ? String(note) : '') : '';
   task.updates.push({
     actor: actor._id,
     actorRole: actor.role,
-    note: note != null ? String(note) : '',
+    note: updateNote,
     imageUrl: imageUrl || '',
     statusFrom: shouldChangeStatus ? statusFrom : null,
     statusTo: shouldChangeStatus ? nextStatus : null,
@@ -135,42 +139,78 @@ export const completeTask = asyncHandler(async (req, res) => {
   res.json({ task: updated });
 });
 
-export const addTaskUpdate = asyncHandler(async (req, res) => {
+async function loadAssignedTask(req) {
   const { taskId } = req.params;
   if (!mongoose.isValidObjectId(taskId)) {
     const err = new Error('Invalid taskId');
     err.statusCode = 400;
     throw err;
   }
-
   const task = await OrderTask.findOne({ _id: taskId, assignee: req.user._id });
   if (!task) {
     const err = new Error('Task not found');
     err.statusCode = 404;
     throw err;
   }
+  return task;
+}
 
-  const note = req.body && req.body.note != null ? String(req.body.note) : '';
+async function respondWithTask(res, taskId) {
+  const updated = await OrderTask.findById(taskId)
+    .populate('order', 'orderType orderedByName orderDate')
+    .populate('updates.actor', 'name email role')
+    .lean();
+  res.json({ task: updated });
+}
+
+/** JSON body: `note` and/or `status` (`pending` | `completed`). */
+export const patchEmployeeTask = asyncHandler(async (req, res) => {
+  const task = await loadAssignedTask(req);
+  const hasNote = req.body && Object.prototype.hasOwnProperty.call(req.body, 'note');
+  const note = hasNote ? (req.body.note != null ? String(req.body.note) : '') : undefined;
   const status = req.body && req.body.status != null ? String(req.body.status) : '';
   if (status && !['pending', 'completed'].includes(status)) {
-    const err = new Error("status must be one of: pending, completed");
+    const err = new Error('status must be one of: pending, completed');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!hasNote && !status) {
+    const err = new Error('Provide at least one of note or status');
     err.statusCode = 400;
     throw err;
   }
 
-  let imageUrl = '';
-  if (req.file && req.file.buffer) {
-    imageUrl = await uploadTaskPhoto({
-      buffer: req.file.buffer,
-      contentType: req.file.mimetype,
-      orderId: task.order.toString(),
-      taskId: task._id.toString(),
-      originalName: req.file.originalname,
-    });
-  }
+  await applyTaskUpdate({
+    task,
+    actor: req.user,
+    note,
+    imageUrl: '',
+    nextStatus: status || null,
+  });
 
-  if (!note && !imageUrl && !status) {
-    const err = new Error('Provide at least one of note, photo, or status');
+  await respondWithTask(res, task._id);
+});
+
+/** Multipart: field `photo` (required). Optional `note`, `status` in the same form. */
+export const uploadEmployeeTaskPhoto = asyncHandler(async (req, res) => {
+  const task = await loadAssignedTask(req);
+  if (!req.file || !req.file.buffer) {
+    const err = new Error('photo is required');
+    err.statusCode = 400;
+    throw err;
+  }
+  const imageUrl = await uploadTaskPhoto({
+    buffer: req.file.buffer,
+    contentType: req.file.mimetype,
+    orderId: task.order.toString(),
+    taskId: task._id.toString(),
+    originalName: req.file.originalname,
+  });
+  const hasNote = req.body && Object.prototype.hasOwnProperty.call(req.body, 'note');
+  const note = hasNote ? (req.body.note != null ? String(req.body.note) : '') : undefined;
+  const status = req.body && req.body.status != null ? String(req.body.status) : '';
+  if (status && !['pending', 'completed'].includes(status)) {
+    const err = new Error('status must be one of: pending, completed');
     err.statusCode = 400;
     throw err;
   }
@@ -183,10 +223,5 @@ export const addTaskUpdate = asyncHandler(async (req, res) => {
     nextStatus: status || null,
   });
 
-  const updated = await OrderTask.findById(task._id)
-    .populate('order', 'orderType orderedByName orderDate')
-    .populate('updates.actor', 'name email role')
-    .lean();
-
-  res.json({ task: updated });
+  await respondWithTask(res, task._id);
 });
