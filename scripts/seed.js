@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import '../config/resolveGcpCredentials.js';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { connectDatabase } from '../config/database.js';

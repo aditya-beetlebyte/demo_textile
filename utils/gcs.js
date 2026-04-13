@@ -2,6 +2,15 @@ import { Storage } from '@google-cloud/storage';
 import path from 'path';
 import crypto from 'crypto';
 
+let storageSingleton;
+
+function getStorage() {
+  if (!storageSingleton) {
+    storageSingleton = new Storage();
+  }
+  return storageSingleton;
+}
+
 function getExtension(originalName, mimeType) {
   const ext = path.extname(originalName || '');
   if (ext && ext.length <= 8) return ext;
@@ -24,8 +33,7 @@ export async function uploadTaskPhoto({ buffer, contentType, orderId, taskId, or
     throw err;
   }
 
-  const storage = new Storage();
-  const bucket = storage.bucket(bucketName);
+  const bucket = getStorage().bucket(bucketName);
   const suffix = getExtension(originalName, contentType);
   const dest = `textile-demo/${orderId}/${taskId}/${crypto.randomUUID()}${suffix}`;
   const file = bucket.file(dest);
@@ -59,6 +67,7 @@ export async function uploadTaskPhoto({ buffer, contentType, orderId, taskId, or
   }
 
   const [url] = await file.getSignedUrl({
+    version: 'v4',
     action: 'read',
     expires: Date.now() + 7 * 24 * 60 * 60 * 1000,
   });

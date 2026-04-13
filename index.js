@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import './config/resolveGcpCredentials.js';
 import express from 'express';
 import cors from 'cors';
 import { connectDatabase } from './config/database.js';
